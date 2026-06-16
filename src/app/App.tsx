@@ -68,6 +68,10 @@ export default function App() {
               <button key={n} onClick={() => scrollTo(n === "Тухай" ? "about" : n === "Бүтээгдэхүүн" ? "product" : "contact")}
                 style={{ textAlign: "left", fontSize: 15, color: "#6b6458", fontWeight: 500 }}>{n}</button>
             ))}
+            <a href="/app"
+              style={{ textAlign: "left", fontSize: 15, color: "#c97d2e", fontFamily: "var(--font-display)", fontWeight: 700, letterSpacing: "0.05em", textDecoration: "none" }}>
+              НЭВТРЭХ →
+            </a>
           </div>
         )}
       </header>
