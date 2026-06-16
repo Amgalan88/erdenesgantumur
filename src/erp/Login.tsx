@@ -78,6 +78,25 @@ export default function Login() {
         <Btn type="submit" disabled={busy} style={{ width: "100%", padding: "13px 0", fontSize: 14 }}>
           {busy ? "Нэвтэрч байна…" : "НЭВТРЭХ"}
         </Btn>
+
+        <button
+          type="button"
+          onClick={() => nav("/")}
+          style={{
+            display: "block",
+            width: "100%",
+            marginTop: 16,
+            background: "transparent",
+            border: "none",
+            color: C.accent,
+            fontFamily: fonts.mono,
+            fontSize: 11,
+            letterSpacing: "0.12em",
+            cursor: "pointer",
+          }}
+        >
+          ← НҮҮР ХУУДАС РУУ БУЦАХ
+        </button>
       </form>
     </div>
   );
