@@ -174,7 +174,8 @@ export default function App() {
               <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                 {[
                   { label: "Вэбсайт", value: "Erdenesgantumur.mn" },
-                  { label: "Имэйл", value: "info@erdenesgantumur.mn" },
+                  { label: "Имэйл", value: "erdenesgantumur@gmail.com" },
+                  { label: "Утас", value: "88019166, 85205258" },
                   { label: "Хаяг", value: "Улаанбаатар, Монгол Улс" },
                 ].map((c, i) => (
                   <div key={i} style={{ padding: "18px 0", borderBottom: "1px solid rgba(245,243,239,0.07)" }}>
