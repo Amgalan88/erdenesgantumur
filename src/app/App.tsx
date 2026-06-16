@@ -52,6 +52,10 @@ export default function App() {
               style={{ background: "#1a1814", color: "#f5f3ef", padding: "8px 18px", fontSize: 12, fontFamily: "var(--font-display)", fontWeight: 700, letterSpacing: "0.07em" }}>
               ЗАХИАЛГА
             </button>
+            <a href="/app"
+              style={{ fontSize: 12, color: "#c97d2e", fontFamily: "var(--font-mono)", letterSpacing: "0.12em", textDecoration: "none" }}>
+              НЭВТРЭХ →
+            </a>
           </nav>
 
           <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)}>
