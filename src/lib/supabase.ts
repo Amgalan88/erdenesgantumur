@@ -20,6 +20,7 @@ export const supabase = createClient(url, anonKey, {
 export const MODULES = {
   documents: "documents", // Ирсэн / явсан бичиг
   files: "files", // Бичиг баримт
+  reports: "reports", // Тайлан
 } as const;
 
 export type ModuleKey = keyof typeof MODULES;

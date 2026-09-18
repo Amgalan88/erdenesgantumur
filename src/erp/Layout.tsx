@@ -17,6 +17,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     { to: "/app", label: "Хяналтын самбар", end: true, show: true },
     { to: "/app/documents", label: "Ирсэн / явсан бичиг", show: can("documents", "view") },
     { to: "/app/files", label: "Бичиг баримт", show: can("files", "view") },
+    { to: "/app/reports", label: "Тайлан", show: can("reports", "view") },
     { to: "/app/audit", label: "Үйлдлийн бүртгэл", show: profile?.role === "superadmin" || profile?.role === "director" },
     { to: "/app/users", label: "Хэрэглэгч / эрх", show: profile?.role === "superadmin" },
   ].filter((i) => i.show);

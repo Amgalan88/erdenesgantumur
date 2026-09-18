@@ -255,13 +255,23 @@ const linkBtn: React.CSSProperties = {
   textDecoration: "underline",
 };
 
-export function Modal({ children, title, onClose }: { children: React.ReactNode; title: string; onClose: () => void }) {
+export function Modal({
+  children,
+  title,
+  onClose,
+  maxWidth = 560,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClose: () => void;
+  maxWidth?: number;
+}) {
   return (
     <div
       onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(26,24,20,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 20px", zIndex: 50, overflowY: "auto" }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 4, padding: 28, width: "100%", maxWidth: 560 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 4, padding: 28, width: "100%", maxWidth }}>
         <h2 style={{ fontFamily: fonts.display, fontWeight: 800, fontSize: 20, color: C.dark, textTransform: "uppercase", marginTop: 0, marginBottom: 20 }}>
           {title}
         </h2>

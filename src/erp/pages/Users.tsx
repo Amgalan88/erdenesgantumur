@@ -23,6 +23,7 @@ interface Perm {
 const MODULES: { key: string; label: string }[] = [
   { key: "documents", label: "Ирсэн / явсан бичиг" },
   { key: "files", label: "Бичиг баримт" },
+  { key: "reports", label: "Тайлан" },
 ];
 const roleLabel: Record<Role, string> = { superadmin: "Супер админ", director: "Захирал", staff: "Ажилтан" };
 

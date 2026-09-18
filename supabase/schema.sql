@@ -20,7 +20,7 @@ create table if not exists public.profiles (
 );
 
 -- ---------- 3. Модуль тус бүрийн эрх ----------
--- module: 'documents' (ирсэн/явсан бичиг), 'files' (бичиг баримт)
+-- module: 'documents' (ирсэн/явсан бичиг), 'files' (бичиг баримт), 'reports' (тайлан)
 create table if not exists public.module_permissions (
   user_id    uuid not null references public.profiles(id) on delete cascade,
   module     text not null,
@@ -86,7 +86,7 @@ set search_path = public as $$
   select role from public.profiles where id = auth.uid();
 $$;
 
--- _module: 'documents' | 'files',  _action: 'view' | 'create' | 'edit'
+-- _module: 'documents' | 'files' | 'reports',  _action: 'view' | 'create' | 'edit'
 create or replace function public.has_perm(_module text, _action text)
 returns boolean language sql security definer stable
 set search_path = public as $$
@@ -232,16 +232,59 @@ on conflict (id) do nothing;
 
 drop policy if exists docs_read on storage.objects;
 create policy docs_read on storage.objects for select
-  using (bucket_id = 'docs' and (public.has_perm('files','view') or public.has_perm('documents','view')));
+  using (bucket_id = 'docs' and (public.has_perm('files','view') or public.has_perm('documents','view') or public.has_perm('reports','view')));
 drop policy if exists docs_write on storage.objects;
 create policy docs_write on storage.objects for insert
-  with check (bucket_id = 'docs' and (public.has_perm('files','create') or public.has_perm('documents','create')));
+  with check (bucket_id = 'docs' and (public.has_perm('files','create') or public.has_perm('documents','create') or public.has_perm('reports','create')));
 drop policy if exists docs_update on storage.objects;
 create policy docs_update on storage.objects for update
   using (bucket_id = 'docs' and public.is_superadmin());
 drop policy if exists docs_delete on storage.objects;
 create policy docs_delete on storage.objects for delete
   using (bucket_id = 'docs' and public.is_superadmin());
+
+-- =====================================================================
+--  Тайлан (томилолт, сарын, төслийн г.м.)
+-- =====================================================================
+create table if not exists public.reports (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null,
+  report_type text not null default 'trip', -- trip=томилолт, monthly=сарын, project=төслийн, other=бусад
+  location    text,           -- томилолтын газар (жишээ: Шанхай, Хятад)
+  start_date  date,
+  end_date    date,
+  body        text,           -- тайлангийн агуулга
+  file_path   text,           -- хавсралт файлын storage зам (заавал биш)
+  file_name   text,
+  created_by  uuid references public.profiles(id),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists audit_reports on public.reports;
+create trigger audit_reports
+  after insert or update or delete on public.reports
+  for each row execute function public.log_audit();
+
+drop trigger if exists reports_touch on public.reports;
+create trigger reports_touch
+  before update on public.reports
+  for each row execute function public.touch_updated_at();
+
+alter table public.reports enable row level security;
+
+drop policy if exists reports_select on public.reports;
+create policy reports_select on public.reports for select
+  using (public.has_perm('reports','view'));
+drop policy if exists reports_insert on public.reports;
+create policy reports_insert on public.reports for insert
+  with check (public.has_perm('reports','create'));
+drop policy if exists reports_update on public.reports;
+create policy reports_update on public.reports for update
+  using (public.has_perm('reports','edit')) with check (public.has_perm('reports','edit'));
+drop policy if exists reports_delete on public.reports;
+create policy reports_delete on public.reports for delete
+  using (public.is_superadmin());
 
 -- =====================================================================
 --  ДУУСЛАА. Дараа нь эхний superadmin-ээ заана:
