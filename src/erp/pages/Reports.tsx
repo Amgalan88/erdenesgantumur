@@ -161,15 +161,20 @@ export default function Reports() {
 
   async function load() {
     setLoading(true);
-    let q = supabase
-      .from("reports")
-      .select("*, report_attachments(count)")
-      .order("start_date", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false });
-    if (filter !== "all") q = q.eq("report_type", filter);
-    const { data, error } = await q;
-    if (error) setErr(error.message);
-    setRows((data as Report[]) ?? []);
+    const query = (cols: string) => {
+      let q = supabase
+        .from("reports")
+        .select(cols)
+        .order("start_date", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false });
+      if (filter !== "all") q = q.eq("report_type", filter);
+      return q;
+    };
+    let { data, error } = await query("*, report_attachments(count)");
+    // report_attachments хүснэгт хараахан үүсээгүй бол зургийн тоогүйгээр жагсаана
+    if (error) ({ data, error } = await query("*"));
+    setErr(error ? error.message : null);
+    setRows((data as unknown as Report[]) ?? []);
     setLoading(false);
   }
 
