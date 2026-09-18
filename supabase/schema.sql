@@ -294,9 +294,12 @@ create table if not exists public.report_attachments (
   file_name    text not null,
   content_type text,
   size_bytes   bigint,
+  section      text,           -- аль бүлгийн доор харагдах ("1", "2"…), null = бүлэгт хамаарахгүй
   created_by   uuid references public.profiles(id),
   created_at   timestamptz not null default now()
 );
+-- Өмнө нь үүсгэсэн хүснэгтэд баганыг нэмэх
+alter table public.report_attachments add column if not exists section text;
 create index if not exists report_attachments_report_idx on public.report_attachments(report_id);
 
 drop trigger if exists audit_report_attachments on public.report_attachments;

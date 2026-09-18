@@ -29,7 +29,14 @@ interface Attachment {
   file_name: string;
   content_type: string | null;
   size_bytes: number | null;
+  section: string | null; // аль бүлгийн доор харагдах ("1", "2"…), null = бүлэгт хамаарахгүй
   url?: string; // signed URL (харуулахад)
+}
+
+// Хадгалаагүй, шинээр сонгосон файл + аль бүлэгт хамаарах
+interface NewFile {
+  file: File;
+  section: string | null;
 }
 
 const typeLabel: Record<ReportType, string> = {
@@ -76,6 +83,42 @@ function fmtRange(r: Pick<Report, "start_date" | "end_date">) {
   if (!r.start_date && !r.end_date) return "—";
   if (r.start_date && r.end_date && r.start_date !== r.end_date) return `${r.start_date} → ${r.end_date}`;
   return r.start_date || r.end_date || "—";
+}
+
+// Агуулгаас "1. Гарчиг", "2) Гарчиг" хэлбэрийн мөрийг бүлгийн гарчиг гэж таньж хуваана.
+// Бүлэг доторх дугаартай жагсаалт (давхардсан дугаар) гарчиг болохгүй.
+interface Section {
+  num: string;
+  title: string;
+  text: string;
+}
+const HEADING = /^\s*(\d+)[.)]\s+(.*\S.*)$/;
+function parseSections(body: string): { intro: string; sections: Section[] } {
+  const intro: string[] = [];
+  const sections: Section[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const m = line.match(HEADING);
+    if (m && !sections.some((x) => x.num === m[1])) {
+      sections.push({ num: m[1], title: m[2].trim(), text: "" });
+    } else if (sections.length) {
+      const cur = sections[sections.length - 1];
+      cur.text += (cur.text ? "\n" : "") + line;
+    } else {
+      intro.push(line);
+    }
+  }
+  sections.forEach((x) => (x.text = x.text.replace(/\s+$/, "")));
+  return { intro: intro.join("\n").trim(), sections };
+}
+
+// Бүлэг нь агуулгаас хасагдсан бол зураг "Бусад" руу орно
+const groupOf = (section: string | null, keys: string[]) => (section && keys.includes(section) ? section : null);
+
+// Үзэх горимд харагдах дарааллаар (бүлэг 1, 2, … дараа нь бусад) зургуудыг эрэмбэлнэ
+function orderImages(atts: Attachment[], body: string | null) {
+  const keys = parseSections(body ?? "").sections.map((x) => x.num);
+  const imgs = atts.filter(isImage);
+  return [...keys.flatMap((k) => imgs.filter((a) => groupOf(a.section, keys) === k)), ...imgs.filter((a) => groupOf(a.section, keys) === null)];
 }
 
 const isImage = (a: { content_type?: string | null; file_name: string }) =>
@@ -149,15 +192,16 @@ export default function Reports() {
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [editing, setEditing] = useState<Report | null>(null);
   const [form, setForm] = useState(empty);
-  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [newFiles, setNewFiles] = useState<NewFile[]>([]);
+  const [activeGroup, setActiveGroup] = useState<string | null>(null); // Ctrl+V-ээр буулгах бүлэг
   const [existing, setExisting] = useState<Attachment[]>([]);
   const [removed, setRemoved] = useState<Attachment[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
-  const [dragOver, setDragOver] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const pickTarget = useRef<string | null>(null); // файл сонгох цонх аль бүлэгт зориулж нээгдсэн
 
   async function load() {
     setLoading(true);
@@ -189,10 +233,11 @@ export default function Reports() {
     setViewAtts(await fetchAtts(r.id));
   }
 
-  function addFiles(list: FileList | File[] | null) {
+  function addFiles(list: FileList | File[] | null, section: string | null) {
     if (!list) return;
-    const arr = Array.from(list);
+    const arr = Array.from(list).map((file) => ({ file, section }));
     if (arr.length) setNewFiles((prev) => [...prev, ...arr]);
+    setActiveGroup(section);
   }
 
   function resetFiles() {
@@ -200,6 +245,7 @@ export default function Reports() {
     setExisting([]);
     setRemoved([]);
     setProgress("");
+    setActiveGroup(null);
   }
 
   function openCreate() {
@@ -228,10 +274,11 @@ export default function Reports() {
   }
 
   async function uploadAll(reportId: string, userId: string | undefined) {
+    const keys = parseSections(form.body).sections.map((x) => x.num);
     for (let i = 0; i < newFiles.length; i++) {
-      const orig = newFiles[i];
+      const item = newFiles[i];
       setProgress(`Жижигрүүлж байна ${i + 1}/${newFiles.length}…`);
-      const f = await compressImage(orig);
+      const f = await compressImage(item.file);
       setProgress(`Байршуулж байна ${i + 1}/${newFiles.length}…`);
       const path = `reports/${reportId}/${Date.now()}_${i}_${safeName(f.name)}`;
       const { error: upErr } = await supabase.storage.from("docs").upload(path, f, { contentType: f.type || undefined });
@@ -242,11 +289,12 @@ export default function Reports() {
         file_name: f.name,
         content_type: f.type || null,
         size_bytes: f.size,
+        section: groupOf(item.section, keys),
         created_by: userId,
       });
       if (insErr) throw new Error(`"${f.name}": ${insErr.message}`);
       // Амжилттай орсныг жагсаалтаас хасна — алдаа гарч дахин хадгалахад давхардахгүй
-      setNewFiles((prev) => prev.filter((x) => x !== orig));
+      setNewFiles((prev) => prev.filter((x) => x !== item));
     }
   }
 
@@ -335,7 +383,7 @@ export default function Reports() {
   const canCreate = can("reports", "create");
   const canEdit = can("reports", "edit");
   const canDelete = profile?.role === "superadmin";
-  const viewImages = viewAtts.filter(isImage);
+  const viewImages = viewing ? orderImages(viewAtts, viewing.body) : [];
   const viewOthers = viewAtts.filter((a) => !isImage(a));
 
   return (
@@ -442,29 +490,7 @@ export default function Reports() {
               <div style={{ fontFamily: fonts.body, color: C.dark }}>{fmtRange(viewing)}</div>
             </div>
           </div>
-          <Card>
-            <div style={{ fontFamily: fonts.body, fontSize: 14, lineHeight: 1.7, color: C.dark, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {viewing.body || <span style={{ color: C.muted }}>Агуулга оруулаагүй байна.</span>}
-            </div>
-          </Card>
-
-          {viewImages.length > 0 && (
-            <div style={{ marginTop: 18 }}>
-              <Label>Зураг ({viewImages.length})</Label>
-              <div style={gallery}>
-                {viewImages.map((a, i) => (
-                  <button
-                    key={a.id}
-                    onClick={() => setLightbox(i)}
-                    title={a.file_name}
-                    style={{ padding: 0, border: "none", background: "none", cursor: "zoom-in" }}
-                  >
-                    {a.url ? <img src={a.url} alt={a.file_name} loading="lazy" style={thumbImg} /> : <div style={fileTile}>…</div>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <ReportBody body={viewing.body} atts={viewAtts} onOpen={(a) => setLightbox(viewImages.indexOf(a))} />
 
           {(viewOthers.length > 0 || viewing.file_name) && (
             <div style={{ marginTop: 14, fontFamily: fonts.body, fontSize: 14 }}>
@@ -507,7 +533,7 @@ export default function Reports() {
               const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
               if (imgs.length) {
                 e.preventDefault();
-                addFiles(imgs);
+                addFiles(imgs, activeGroup);
               }
             }}
           >
@@ -566,78 +592,55 @@ export default function Reports() {
                 value={form.body}
                 onChange={(e) => setForm({ ...form, body: e.target.value })}
               />
+              <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>
+                Бүлгийн гарчгийг «1. Гарчиг», «2. Гарчиг» гэж мөрийн эхэнд бичвэл доор бүлэг бүрт зураг хавсаргах хэсэг гарна.
+              </div>
             </div>
 
-            <div style={{ marginTop: 14 }}>
-              <Label>Зураг, хавсралт (олныг зэрэг сонгож болно)</Label>
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
+            <div style={{ marginTop: 18 }}>
+              <Label>Зураг, хавсралт</Label>
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  addFiles(e.target.files, pickTarget.current);
+                  e.target.value = "";
                 }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOver(false);
-                  addFiles(e.dataTransfer.files);
-                }}
-                onClick={() => fileInput.current?.click()}
-                style={{
-                  border: `2px dashed ${dragOver ? C.accent : C.line}`,
-                  background: dragOver ? "rgba(201,125,46,0.06)" : "#fff",
-                  borderRadius: 3,
-                  padding: "18px 14px",
-                  textAlign: "center",
-                  cursor: "pointer",
-                  fontFamily: fonts.body,
-                  fontSize: 13,
-                  color: C.muted,
-                }}
-              >
-                📷 Зураг сонгох эсвэл энд чирч оруулах
-                <div style={{ fontSize: 11, marginTop: 4 }}>Хуулсан зургаа Ctrl+V дарж шууд буулгаж болно</div>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  multiple
-                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    addFiles(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
+              />
+              {(() => {
+                const sections = parseSections(form.body).sections;
+                const keys = sections.map((x) => x.num);
+                const groups: { key: string | null; title: string }[] = [
+                  ...sections.map((x) => ({ key: x.num as string | null, title: `${x.num}. ${x.title}` })),
+                  { key: null, title: sections.length ? "Бусад (бүлэгт хамаарахгүй)" : "Тайлангийн зураг" },
+                ];
+                return groups.map((g) => (
+                  <AttachGroup
+                    key={g.key ?? "_other"}
+                    title={g.title}
+                    active={activeGroup === g.key}
+                    onActivate={() => setActiveGroup(g.key)}
+                    existing={existing.filter((a) => groupOf(a.section, keys) === g.key)}
+                    pending={newFiles.filter((n) => groupOf(n.section, keys) === g.key)}
+                    onPick={() => {
+                      pickTarget.current = g.key;
+                      fileInput.current?.click();
+                    }}
+                    onDropFiles={(files) => addFiles(files, g.key)}
+                    onRemoveExisting={(a) => {
+                      setExisting((prev) => prev.filter((x) => x.id !== a.id));
+                      setRemoved((prev) => [...prev, a]);
+                    }}
+                    onRemovePending={(n) => setNewFiles((prev) => prev.filter((x) => x !== n))}
+                  />
+                ));
+              })()}
+              <div style={{ fontFamily: fonts.body, fontSize: 11, color: C.muted, marginTop: 6 }}>
+                Хуулсан зургаа Ctrl+V дарж буулгавал сүүлд сонгосон бүлэгт орно.
               </div>
-
-              {(existing.length > 0 || newFiles.length > 0) && (
-                <div style={{ ...gallery, marginTop: 12 }}>
-                  {existing.map((a) => (
-                    <div key={a.id} style={{ position: "relative" }} title={a.file_name}>
-                      {isImage(a) && a.url ? <img src={a.url} alt={a.file_name} style={thumbImg} /> : <div style={fileTile}>{a.file_name}</div>}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExisting((prev) => prev.filter((x) => x.id !== a.id));
-                          setRemoved((prev) => [...prev, a]);
-                        }}
-                        style={removeBtn}
-                        aria-label="Хасах"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  {newFiles.map((f, i) => (
-                    <div key={`${f.name}-${f.size}-${i}`} style={{ position: "relative" }} title={f.name}>
-                      <LocalThumb file={f} />
-                      <span style={newBadge}>ШИНЭ</span>
-                      <button type="button" onClick={() => setNewFiles((prev) => prev.filter((_, j) => j !== i))} style={removeBtn} aria-label="Хасах">
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
               {editing?.file_name && (
                 <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 8 }}>Өмнөх хавсралт: {editing.file_name}</div>
               )}
@@ -664,6 +667,141 @@ export default function Reports() {
             </div>
           </form>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+function Gallery({ imgs, onOpen }: { imgs: Attachment[]; onOpen: (a: Attachment) => void }) {
+  if (imgs.length === 0) return null;
+  return (
+    <div style={{ ...gallery, marginTop: 10 }}>
+      {imgs.map((a) => (
+        <button key={a.id} onClick={() => onOpen(a)} title={a.file_name} style={{ padding: 0, border: "none", background: "none", cursor: "zoom-in" }}>
+          {a.url ? <img src={a.url} alt={a.file_name} loading="lazy" style={thumbImg} /> : <div style={fileTile}>…</div>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Үзэх горим: бүлэг бүрийн текстийн доор тухайн бүлгийн зургууд
+function ReportBody({ body, atts, onOpen }: { body: string | null; atts: Attachment[]; onOpen: (a: Attachment) => void }) {
+  const { intro, sections } = parseSections(body ?? "");
+  const keys = sections.map((x) => x.num);
+  const imgs = atts.filter(isImage);
+  const imgsFor = (k: string | null) => imgs.filter((a) => groupOf(a.section, keys) === k);
+  const text: React.CSSProperties = { fontFamily: fonts.body, fontSize: 14, lineHeight: 1.7, color: C.dark, whiteSpace: "pre-wrap", wordBreak: "break-word" };
+  const other = imgsFor(null);
+
+  return (
+    <>
+      <Card>
+        {!body && <span style={{ ...text, color: C.muted }}>Агуулга оруулаагүй байна.</span>}
+        {intro && <div style={text}>{intro}</div>}
+        {sections.map((x, i) => (
+          <div key={x.num} style={{ marginTop: i === 0 && !intro ? 0 : 22 }}>
+            <div style={{ fontFamily: fonts.display, fontWeight: 800, fontSize: 15, color: C.dark, letterSpacing: "0.02em" }}>
+              {x.num}. {x.title}
+            </div>
+            {x.text && <div style={{ ...text, marginTop: 6 }}>{x.text}</div>}
+            <Gallery imgs={imgsFor(x.num)} onOpen={onOpen} />
+          </div>
+        ))}
+      </Card>
+      {other.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <Label>{sections.length ? "Бусад зураг" : "Зураг"} ({other.length})</Label>
+          <Gallery imgs={other} onOpen={onOpen} />
+        </div>
+      )}
+    </>
+  );
+}
+
+// Засах горим: нэг бүлгийн зураг оруулах хэсэг (товч, чирж оруулах, урьдчилан харах)
+function AttachGroup({
+  title,
+  active,
+  onActivate,
+  existing,
+  pending,
+  onPick,
+  onDropFiles,
+  onRemoveExisting,
+  onRemovePending,
+}: {
+  title: string;
+  active: boolean;
+  onActivate: () => void;
+  existing: Attachment[];
+  pending: NewFile[];
+  onPick: () => void;
+  onDropFiles: (files: FileList) => void;
+  onRemoveExisting: (a: Attachment) => void;
+  onRemovePending: (n: NewFile) => void;
+}) {
+  const [over, setOver] = useState(false);
+  const empty = existing.length === 0 && pending.length === 0;
+  return (
+    <div
+      onClick={onActivate}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        onDropFiles(e.dataTransfer.files);
+      }}
+      style={{
+        marginTop: 10,
+        padding: 12,
+        background: over ? "rgba(201,125,46,0.06)" : "#fff",
+        border: `${over ? 2 : 1}px ${over ? "dashed" : "solid"} ${over || active ? C.accent : C.line}`,
+        borderRadius: 3,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <div style={{ fontFamily: fonts.body, fontSize: 13, fontWeight: 600, color: C.dark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {title}
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onActivate();
+            onPick();
+          }}
+          style={{ ...linkBtn, fontSize: 12, whiteSpace: "nowrap", textDecoration: "none", fontWeight: 600 }}
+        >
+          📷 + Зураг нэмэх
+        </button>
+      </div>
+      {empty ? (
+        <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>Зураг алга — энд чирч оруулж болно</div>
+      ) : (
+        <div style={{ ...gallery, gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", marginTop: 10 }}>
+          {existing.map((a) => (
+            <div key={a.id} style={{ position: "relative" }} title={a.file_name}>
+              {isImage(a) && a.url ? <img src={a.url} alt={a.file_name} style={thumbImg} /> : <div style={fileTile}>{a.file_name}</div>}
+              <button type="button" onClick={() => onRemoveExisting(a)} style={removeBtn} aria-label="Хасах">
+                ×
+              </button>
+            </div>
+          ))}
+          {pending.map((n, i) => (
+            <div key={`${n.file.name}-${n.file.size}-${i}`} style={{ position: "relative" }} title={n.file.name}>
+              <LocalThumb file={n.file} />
+              <span style={newBadge}>ШИНЭ</span>
+              <button type="button" onClick={() => onRemovePending(n)} style={removeBtn} aria-label="Хасах">
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
