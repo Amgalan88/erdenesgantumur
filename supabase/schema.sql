@@ -286,6 +286,36 @@ drop policy if exists reports_delete on public.reports;
 create policy reports_delete on public.reports for delete
   using (public.is_superadmin());
 
+-- ---------- Тайлангийн хавсралт (олон зураг / файл) ----------
+create table if not exists public.report_attachments (
+  id           uuid primary key default gen_random_uuid(),
+  report_id    uuid not null references public.reports(id) on delete cascade,
+  storage_path text not null,
+  file_name    text not null,
+  content_type text,
+  size_bytes   bigint,
+  created_by   uuid references public.profiles(id),
+  created_at   timestamptz not null default now()
+);
+create index if not exists report_attachments_report_idx on public.report_attachments(report_id);
+
+drop trigger if exists audit_report_attachments on public.report_attachments;
+create trigger audit_report_attachments
+  after insert or update or delete on public.report_attachments
+  for each row execute function public.log_audit();
+
+alter table public.report_attachments enable row level security;
+
+drop policy if exists report_att_select on public.report_attachments;
+create policy report_att_select on public.report_attachments for select
+  using (public.has_perm('reports','view'));
+drop policy if exists report_att_insert on public.report_attachments;
+create policy report_att_insert on public.report_attachments for insert
+  with check (public.has_perm('reports','create') or public.has_perm('reports','edit'));
+drop policy if exists report_att_delete on public.report_attachments;
+create policy report_att_delete on public.report_attachments for delete
+  using (public.has_perm('reports','edit'));
+
 -- =====================================================================
 --  ДУУСЛАА. Дараа нь эхний superadmin-ээ заана:
 --  1) Authentication → Users → Add user (и-мэйл+нууц үг)
