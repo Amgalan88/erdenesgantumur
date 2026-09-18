@@ -124,6 +124,18 @@ function orderImages(atts: Attachment[], body: string | null) {
 const isImage = (a: { content_type?: string | null; file_name: string }) =>
   (a.content_type ?? "").startsWith("image/") || /\.(jpe?g|png|gif|webp|heic|bmp)$/i.test(a.file_name);
 
+const isPdf = (a: { content_type?: string | null; file_name: string }) =>
+  a.content_type === "application/pdf" || /\.pdf$/i.test(a.file_name);
+
+interface Group {
+  key: string | null;
+  title: string;
+}
+
+const IMAGE_ACCEPT = "image/*";
+const PDF_ACCEPT = "application/pdf,.pdf";
+const FILE_ACCEPT = "image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
+
 function safeName(name: string) {
   return name.replace(/[^\w.\-]/g, "_");
 }
@@ -170,6 +182,16 @@ async function fetchAtts(reportId: string) {
   return withUrls((data as Attachment[]) ?? []);
 }
 
+// Зураг биш файлын (PDF г.м.) дүрс
+function FileTile({ name, pdf }: { name: string; pdf: boolean }) {
+  return (
+    <div style={{ ...fileTile, flexDirection: "column", gap: 6 }}>
+      <span style={{ ...pdfBadge, background: pdf ? "#b3361f" : C.muted }}>{pdf ? "PDF" : (name.split(".").pop() ?? "").toUpperCase()}</span>
+      <span style={{ fontSize: 10, lineHeight: 1.3, maxHeight: "3.9em", overflow: "hidden" }}>{name}</span>
+    </div>
+  );
+}
+
 // Шинээр сонгосон файлын урьдчилсан харагдац (object URL-ийг цэвэрлэнэ)
 function LocalThumb({ file }: { file: File }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -179,7 +201,7 @@ function LocalThumb({ file }: { file: File }) {
     setUrl(u);
     return () => URL.revokeObjectURL(u);
   }, [file]);
-  return url ? <img src={url} alt={file.name} style={thumbImg} /> : <div style={fileTile}>{file.name}</div>;
+  return url ? <img src={url} alt={file.name} style={thumbImg} /> : <FileTile name={file.name} pdf={isPdf({ content_type: file.type, file_name: file.name })} />;
 }
 
 export default function Reports() {
@@ -202,6 +224,7 @@ export default function Reports() {
   const [err, setErr] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const pickTarget = useRef<string | null>(null); // файл сонгох цонх аль бүлэгт зориулж нээгдсэн
+  const origSection = useRef<Map<string, string | null>>(new Map()); // засахаас өмнөх бүлэг (шилжүүлсэн эсэхийг мэдэх)
 
   async function load() {
     setLoading(true);
@@ -270,7 +293,9 @@ export default function Reports() {
     resetFiles();
     setShowForm(true);
     setErr(null);
-    setExisting(await fetchAtts(r.id));
+    const atts = await fetchAtts(r.id);
+    origSection.current = new Map(atts.map((a) => [a.id, a.section]));
+    setExisting(atts);
   }
 
   async function uploadAll(reportId: string, userId: string | undefined) {
@@ -339,6 +364,16 @@ export default function Reports() {
         setRemoved([]);
       }
 
+      // Өөр бүлэг рүү шилжүүлсэн хуучин хавсралтуудыг шинэчлэх
+      const keys = parseSections(form.body).sections.map((x) => x.num);
+      for (const a of existing) {
+        const sec = groupOf(a.section, keys);
+        if (sec === groupOf(origSection.current.get(a.id) ?? null, keys)) continue;
+        const { error } = await supabase.from("report_attachments").update({ section: sec }).eq("id", a.id);
+        if (error) throw new Error(`"${a.file_name}" шилжүүлэх: ${error.message}`);
+        origSection.current.set(a.id, sec);
+      }
+
       await uploadAll(reportId, u.user?.id);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -384,7 +419,6 @@ export default function Reports() {
   const canEdit = can("reports", "edit");
   const canDelete = profile?.role === "superadmin";
   const viewImages = viewing ? orderImages(viewAtts, viewing.body) : [];
-  const viewOthers = viewAtts.filter((a) => !isImage(a));
 
   return (
     <div>
@@ -490,25 +524,19 @@ export default function Reports() {
               <div style={{ fontFamily: fonts.body, color: C.dark }}>{fmtRange(viewing)}</div>
             </div>
           </div>
-          <ReportBody body={viewing.body} atts={viewAtts} onOpen={(a) => setLightbox(viewImages.indexOf(a))} />
+          <ReportBody
+            body={viewing.body}
+            atts={viewAtts}
+            onOpen={(a) => setLightbox(viewImages.indexOf(a))}
+            onDownload={(a) => download(a.storage_path)}
+          />
 
-          {(viewOthers.length > 0 || viewing.file_name) && (
+          {viewing.file_name && (
             <div style={{ marginTop: 14, fontFamily: fonts.body, fontSize: 14 }}>
-              <Label>Бусад хавсралт</Label>
-              {viewOthers.map((a) => (
-                <div key={a.id}>
-                  <button onClick={() => download(a.storage_path)} style={linkBtn}>
-                    📎 {a.file_name}
-                  </button>
-                </div>
-              ))}
-              {viewing.file_name && (
-                <div>
-                  <button onClick={() => download(viewing.file_path)} style={linkBtn}>
-                    📎 {viewing.file_name}
-                  </button>
-                </div>
-              )}
+              <Label>Өмнөх хавсралт</Label>
+              <button onClick={() => download(viewing.file_path)} style={linkBtn}>
+                📎 {viewing.file_name}
+              </button>
             </div>
           )}
 
@@ -593,7 +621,7 @@ export default function Reports() {
                 onChange={(e) => setForm({ ...form, body: e.target.value })}
               />
               <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>
-                Бүлгийн гарчгийг «1. Гарчиг», «2. Гарчиг» гэж мөрийн эхэнд бичвэл доор бүлэг бүрт зураг хавсаргах хэсэг гарна.
+                Бүлгийн гарчгийг «1. Гарчиг», «2. Гарчиг» гэж мөрийн эхэнд бичвэл доор бүлэг бүрт зураг, PDF хавсаргах хэсэг гарна.
               </div>
             </div>
 
@@ -603,7 +631,7 @@ export default function Reports() {
                 ref={fileInput}
                 type="file"
                 multiple
-                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                accept={FILE_ACCEPT}
                 style={{ display: "none" }}
                 onChange={(e) => {
                   addFiles(e.target.files, pickTarget.current);
@@ -613,21 +641,25 @@ export default function Reports() {
               {(() => {
                 const sections = parseSections(form.body).sections;
                 const keys = sections.map((x) => x.num);
-                const groups: { key: string | null; title: string }[] = [
+                const groups: Group[] = [
                   ...sections.map((x) => ({ key: x.num as string | null, title: `${x.num}. ${x.title}` })),
-                  { key: null, title: sections.length ? "Бусад (бүлэгт хамаарахгүй)" : "Тайлангийн зураг" },
+                  { key: null, title: sections.length ? "Бусад (бүлэгт хамаарахгүй)" : "Тайлангийн зураг, PDF" },
                 ];
                 return groups.map((g) => (
                   <AttachGroup
                     key={g.key ?? "_other"}
                     title={g.title}
+                    groups={groups}
                     active={activeGroup === g.key}
                     onActivate={() => setActiveGroup(g.key)}
                     existing={existing.filter((a) => groupOf(a.section, keys) === g.key)}
                     pending={newFiles.filter((n) => groupOf(n.section, keys) === g.key)}
-                    onPick={() => {
+                    onPick={(accept) => {
                       pickTarget.current = g.key;
-                      fileInput.current?.click();
+                      if (fileInput.current) {
+                        fileInput.current.accept = accept;
+                        fileInput.current.click();
+                      }
                     }}
                     onDropFiles={(files) => addFiles(files, g.key)}
                     onRemoveExisting={(a) => {
@@ -635,11 +667,13 @@ export default function Reports() {
                       setRemoved((prev) => [...prev, a]);
                     }}
                     onRemovePending={(n) => setNewFiles((prev) => prev.filter((x) => x !== n))}
+                    onMoveExisting={(a, sec) => setExisting((prev) => prev.map((x) => (x.id === a.id ? { ...x, section: sec } : x)))}
+                    onMovePending={(n, sec) => setNewFiles((prev) => prev.map((x) => (x === n ? { ...x, section: sec } : x)))}
                   />
                 ));
               })()}
               <div style={{ fontFamily: fonts.body, fontSize: 11, color: C.muted, marginTop: 6 }}>
-                Хуулсан зургаа Ctrl+V дарж буулгавал сүүлд сонгосон бүлэгт орно.
+                Зураг бүрийн доорх цэснээс аль бүлэгт хамаарахыг сольж болно. Хуулсан зургаа Ctrl+V дарж буулгавал сүүлд сонгосон бүлэгт орно.
               </div>
               {editing?.file_name && (
                 <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 8 }}>Өмнөх хавсралт: {editing.file_name}</div>
@@ -685,34 +719,62 @@ function Gallery({ imgs, onOpen }: { imgs: Attachment[]; onOpen: (a: Attachment)
   );
 }
 
-// Үзэх горим: бүлэг бүрийн текстийн доор тухайн бүлгийн зургууд
-function ReportBody({ body, atts, onOpen }: { body: string | null; atts: Attachment[]; onOpen: (a: Attachment) => void }) {
+function FileLinks({ files, onDownload }: { files: Attachment[]; onDownload: (a: Attachment) => void }) {
+  if (files.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+      {files.map((a) => (
+        <button key={a.id} onClick={() => onDownload(a)} style={fileChip} title="Нээх">
+          <span style={{ ...pdfBadge, background: isPdf(a) ? "#b3361f" : C.muted }}>{isPdf(a) ? "PDF" : (a.file_name.split(".").pop() ?? "").toUpperCase()}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file_name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Үзэх горим: бүлэг бүрийн текстийн доор тухайн бүлгийн зураг, PDF
+function ReportBody({
+  body,
+  atts,
+  onOpen,
+  onDownload,
+}: {
+  body: string | null;
+  atts: Attachment[];
+  onOpen: (a: Attachment) => void;
+  onDownload: (a: Attachment) => void;
+}) {
   const { intro, sections } = parseSections(body ?? "");
   const keys = sections.map((x) => x.num);
-  const imgs = atts.filter(isImage);
-  const imgsFor = (k: string | null) => imgs.filter((a) => groupOf(a.section, keys) === k);
+  const inGroup = (k: string | null) => atts.filter((a) => groupOf(a.section, keys) === k);
   const text: React.CSSProperties = { fontFamily: fonts.body, fontSize: 14, lineHeight: 1.7, color: C.dark, whiteSpace: "pre-wrap", wordBreak: "break-word" };
-  const other = imgsFor(null);
+  const other = inGroup(null);
 
   return (
     <>
       <Card>
         {!body && <span style={{ ...text, color: C.muted }}>Агуулга оруулаагүй байна.</span>}
         {intro && <div style={text}>{intro}</div>}
-        {sections.map((x, i) => (
-          <div key={x.num} style={{ marginTop: i === 0 && !intro ? 0 : 22 }}>
-            <div style={{ fontFamily: fonts.display, fontWeight: 800, fontSize: 15, color: C.dark, letterSpacing: "0.02em" }}>
-              {x.num}. {x.title}
+        {sections.map((x, i) => {
+          const g = inGroup(x.num);
+          return (
+            <div key={x.num} style={{ marginTop: i === 0 && !intro ? 0 : 22 }}>
+              <div style={{ fontFamily: fonts.display, fontWeight: 800, fontSize: 15, color: C.dark, letterSpacing: "0.02em" }}>
+                {x.num}. {x.title}
+              </div>
+              {x.text && <div style={{ ...text, marginTop: 6 }}>{x.text}</div>}
+              <Gallery imgs={g.filter(isImage)} onOpen={onOpen} />
+              <FileLinks files={g.filter((a) => !isImage(a))} onDownload={onDownload} />
             </div>
-            {x.text && <div style={{ ...text, marginTop: 6 }}>{x.text}</div>}
-            <Gallery imgs={imgsFor(x.num)} onOpen={onOpen} />
-          </div>
-        ))}
+          );
+        })}
       </Card>
       {other.length > 0 && (
         <div style={{ marginTop: 18 }}>
-          <Label>{sections.length ? "Бусад зураг" : "Зураг"} ({other.length})</Label>
-          <Gallery imgs={other} onOpen={onOpen} />
+          <Label>{sections.length ? "Бусад хавсралт" : "Хавсралт"} ({other.length})</Label>
+          <Gallery imgs={other.filter(isImage)} onOpen={onOpen} />
+          <FileLinks files={other.filter((a) => !isImage(a))} onDownload={onDownload} />
         </div>
       )}
     </>
@@ -720,8 +782,28 @@ function ReportBody({ body, atts, onOpen }: { body: string | null; atts: Attachm
 }
 
 // Засах горим: нэг бүлгийн зураг оруулах хэсэг (товч, чирж оруулах, урьдчилан харах)
+function SectionSelect({ value, groups, onChange }: { value: string | null; groups: Group[]; onChange: (v: string | null) => void }) {
+  if (groups.length < 2) return null;
+  return (
+    <select
+      value={value ?? ""}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
+      title="Аль бүлэгт хамаарах"
+      style={{ width: "100%", marginTop: 4, fontFamily: fonts.body, fontSize: 11, padding: "3px 2px", border: `1px solid ${C.line}`, borderRadius: 2, background: "#fff", color: C.dark }}
+    >
+      {groups.map((g) => (
+        <option key={g.key ?? "_other"} value={g.key ?? ""}>
+          {g.key ? `${g.key}-р бүлэг` : "Бусад"}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function AttachGroup({
   title,
+  groups,
   active,
   onActivate,
   existing,
@@ -730,16 +812,21 @@ function AttachGroup({
   onDropFiles,
   onRemoveExisting,
   onRemovePending,
+  onMoveExisting,
+  onMovePending,
 }: {
   title: string;
+  groups: Group[];
   active: boolean;
   onActivate: () => void;
   existing: Attachment[];
   pending: NewFile[];
-  onPick: () => void;
+  onPick: (accept: string) => void;
   onDropFiles: (files: FileList) => void;
   onRemoveExisting: (a: Attachment) => void;
   onRemovePending: (n: NewFile) => void;
+  onMoveExisting: (a: Attachment, section: string | null) => void;
+  onMovePending: (n: NewFile, section: string | null) => void;
 }) {
   const [over, setOver] = useState(false);
   const empty = existing.length === 0 && pending.length === 0;
@@ -768,28 +855,37 @@ function AttachGroup({
         <div style={{ fontFamily: fonts.body, fontSize: 13, fontWeight: 600, color: C.dark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {title}
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onActivate();
-            onPick();
-          }}
-          style={{ ...linkBtn, fontSize: 12, whiteSpace: "nowrap", textDecoration: "none", fontWeight: 600 }}
-        >
-          📷 + Зураг нэмэх
-        </button>
+        <div style={{ display: "flex", gap: 14, flexShrink: 0 }}>
+          {([
+            ["📷 + Зураг", IMAGE_ACCEPT],
+            ["📄 + PDF", PDF_ACCEPT],
+          ] as const).map(([label, accept]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate();
+                onPick(accept);
+              }}
+              style={{ ...linkBtn, fontSize: 12, whiteSpace: "nowrap", textDecoration: "none", fontWeight: 600, padding: 0 }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       {empty ? (
-        <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>Зураг алга — энд чирч оруулж болно</div>
+        <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>Хоосон — зураг, PDF-ээ энд чирч оруулж болно</div>
       ) : (
         <div style={{ ...gallery, gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", marginTop: 10 }}>
           {existing.map((a) => (
             <div key={a.id} style={{ position: "relative" }} title={a.file_name}>
-              {isImage(a) && a.url ? <img src={a.url} alt={a.file_name} style={thumbImg} /> : <div style={fileTile}>{a.file_name}</div>}
+              {isImage(a) && a.url ? <img src={a.url} alt={a.file_name} style={thumbImg} /> : <FileTile name={a.file_name} pdf={isPdf(a)} />}
               <button type="button" onClick={() => onRemoveExisting(a)} style={removeBtn} aria-label="Хасах">
                 ×
               </button>
+              <SectionSelect value={a.section} groups={groups} onChange={(v) => onMoveExisting(a, v)} />
             </div>
           ))}
           {pending.map((n, i) => (
@@ -799,6 +895,7 @@ function AttachGroup({
               <button type="button" onClick={() => onRemovePending(n)} style={removeBtn} aria-label="Хасах">
                 ×
               </button>
+              <SectionSelect value={n.section} groups={groups} onChange={(v) => onMovePending(n, v)} />
             </div>
           ))}
         </div>
@@ -953,7 +1050,7 @@ const removeBtn: React.CSSProperties = {
 const newBadge: React.CSSProperties = {
   position: "absolute",
   left: 4,
-  bottom: 4,
+  top: 4,
   background: C.accent,
   color: C.light,
   fontFamily: fonts.mono,
@@ -961,4 +1058,30 @@ const newBadge: React.CSSProperties = {
   letterSpacing: "0.1em",
   padding: "2px 5px",
   borderRadius: 2,
+};
+
+const pdfBadge: React.CSSProperties = {
+  fontFamily: fonts.mono,
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  color: "#fff",
+  padding: "2px 6px",
+  borderRadius: 2,
+  flexShrink: 0,
+};
+
+const fileChip: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  maxWidth: "100%",
+  padding: "7px 10px",
+  background: "#faf8f4",
+  border: `1px solid ${C.line}`,
+  borderRadius: 3,
+  cursor: "pointer",
+  fontFamily: fonts.body,
+  fontSize: 13,
+  color: C.dark,
 };

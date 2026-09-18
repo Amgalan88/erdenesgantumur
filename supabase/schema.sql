@@ -315,6 +315,9 @@ create policy report_att_select on public.report_attachments for select
 drop policy if exists report_att_insert on public.report_attachments;
 create policy report_att_insert on public.report_attachments for insert
   with check (public.has_perm('reports','create') or public.has_perm('reports','edit'));
+drop policy if exists report_att_update on public.report_attachments;
+create policy report_att_update on public.report_attachments for update
+  using (public.has_perm('reports','edit')) with check (public.has_perm('reports','edit'));
 drop policy if exists report_att_delete on public.report_attachments;
 create policy report_att_delete on public.report_attachments for delete
   using (public.has_perm('reports','edit'));
