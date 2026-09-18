@@ -20,7 +20,7 @@ create table if not exists public.profiles (
 );
 
 -- ---------- 3. Модуль тус бүрийн эрх ----------
--- module: 'documents' (ирсэн/явсан бичиг), 'files' (бичиг баримт), 'reports' (тайлан)
+-- module: 'documents' (ирсэн/явсан бичиг), 'files' (бичиг баримт), 'reports' (тайлан), 'roadmap'
 create table if not exists public.module_permissions (
   user_id    uuid not null references public.profiles(id) on delete cascade,
   module     text not null,
@@ -86,7 +86,7 @@ set search_path = public as $$
   select role from public.profiles where id = auth.uid();
 $$;
 
--- _module: 'documents' | 'files' | 'reports',  _action: 'view' | 'create' | 'edit'
+-- _module: 'documents' | 'files' | 'reports' | 'roadmap',  _action: 'view' | 'create' | 'edit'
 create or replace function public.has_perm(_module text, _action text)
 returns boolean language sql security definer stable
 set search_path = public as $$
@@ -321,6 +321,92 @@ create policy report_att_update on public.report_attachments for update
 drop policy if exists report_att_delete on public.report_attachments;
 create policy report_att_delete on public.report_attachments for delete
   using (public.has_perm('reports','edit'));
+
+-- =====================================================================
+--  Компанийн Roadmap (стратегийн зорилт, төсөв, зураг)
+-- =====================================================================
+create table if not exists public.roadmap_items (
+  id           uuid primary key default gen_random_uuid(),
+  title        text not null,
+  description  text,
+  category     text,                 -- чиглэл: үйлдвэрлэл, борлуулалт, хөрөнгө оруулалт г.м.
+  status       text not null default 'planned'
+               check (status in ('planned','in_progress','done','on_hold')),
+  responsible  text,                 -- хариуцагч
+  start_date   date,
+  target_date  date,                 -- дуусгах зорилтот огноо
+  progress     int not null default 0 check (progress between 0 and 100),
+  currency     text not null default 'MNT' check (currency in ('MNT','USD','CNY')),
+  budget       numeric(18,2),        -- төлөвлөсөн төсөв
+  spent        numeric(18,2),        -- зарцуулсан дүн
+  created_by   uuid references public.profiles(id),
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+create table if not exists public.roadmap_attachments (
+  id           uuid primary key default gen_random_uuid(),
+  item_id      uuid not null references public.roadmap_items(id) on delete cascade,
+  storage_path text not null,
+  file_name    text not null,
+  content_type text,
+  size_bytes   bigint,
+  created_by   uuid references public.profiles(id),
+  created_at   timestamptz not null default now()
+);
+create index if not exists roadmap_attachments_item_idx on public.roadmap_attachments(item_id);
+
+drop trigger if exists audit_roadmap_items on public.roadmap_items;
+create trigger audit_roadmap_items
+  after insert or update or delete on public.roadmap_items
+  for each row execute function public.log_audit();
+
+drop trigger if exists audit_roadmap_attachments on public.roadmap_attachments;
+create trigger audit_roadmap_attachments
+  after insert or update or delete on public.roadmap_attachments
+  for each row execute function public.log_audit();
+
+drop trigger if exists roadmap_items_touch on public.roadmap_items;
+create trigger roadmap_items_touch
+  before update on public.roadmap_items
+  for each row execute function public.touch_updated_at();
+
+alter table public.roadmap_items       enable row level security;
+alter table public.roadmap_attachments enable row level security;
+
+drop policy if exists roadmap_select on public.roadmap_items;
+create policy roadmap_select on public.roadmap_items for select
+  using (public.has_perm('roadmap','view'));
+drop policy if exists roadmap_insert on public.roadmap_items;
+create policy roadmap_insert on public.roadmap_items for insert
+  with check (public.has_perm('roadmap','create'));
+drop policy if exists roadmap_update on public.roadmap_items;
+create policy roadmap_update on public.roadmap_items for update
+  using (public.has_perm('roadmap','edit')) with check (public.has_perm('roadmap','edit'));
+drop policy if exists roadmap_delete on public.roadmap_items;
+create policy roadmap_delete on public.roadmap_items for delete
+  using (public.is_superadmin());
+
+drop policy if exists roadmap_att_select on public.roadmap_attachments;
+create policy roadmap_att_select on public.roadmap_attachments for select
+  using (public.has_perm('roadmap','view'));
+drop policy if exists roadmap_att_insert on public.roadmap_attachments;
+create policy roadmap_att_insert on public.roadmap_attachments for insert
+  with check (public.has_perm('roadmap','create') or public.has_perm('roadmap','edit'));
+drop policy if exists roadmap_att_delete on public.roadmap_attachments;
+create policy roadmap_att_delete on public.roadmap_attachments for delete
+  using (public.has_perm('roadmap','edit'));
+
+-- Хавсралт файлын эрхэд roadmap-ийг нэмэх
+drop policy if exists docs_read on storage.objects;
+create policy docs_read on storage.objects for select
+  using (bucket_id = 'docs' and (public.has_perm('files','view') or public.has_perm('documents','view')
+         or public.has_perm('reports','view') or public.has_perm('roadmap','view')));
+drop policy if exists docs_write on storage.objects;
+create policy docs_write on storage.objects for insert
+  with check (bucket_id = 'docs' and (public.has_perm('files','create') or public.has_perm('documents','create')
+         or public.has_perm('reports','create') or public.has_perm('roadmap','create')));
+
 
 -- =====================================================================
 --  ДУУСЛАА. Дараа нь эхний superadmin-ээ заана:

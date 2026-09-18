@@ -24,6 +24,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: "documents", label: "Ирсэн / явсан бичиг" },
   { key: "files", label: "Бичиг баримт" },
   { key: "reports", label: "Тайлан" },
+  { key: "roadmap", label: "Roadmap" },
 ];
 const roleLabel: Record<Role, string> = { superadmin: "Супер админ", director: "Захирал", staff: "Ажилтан" };
 

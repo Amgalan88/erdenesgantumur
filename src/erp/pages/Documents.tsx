@@ -260,12 +260,63 @@ export function Modal({
   title,
   onClose,
   maxWidth = 560,
+  fullscreen = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClose: () => void;
   maxWidth?: number;
+  fullscreen?: boolean; // бүтэн дэлгэц (агуулга нь maxWidth-ээр голлоно)
 }) {
+  useEffect(() => {
+    // Esc зөвхөн бүтэн дэлгэцэд (засах цонхонд бичсэн зүйл санамсаргүй алдагдахгүй),
+    // томруулсан зураг нээлттэй бол эхлээд тэр хаагдана
+    function onKey(e: KeyboardEvent) {
+      if (fullscreen && e.key === "Escape" && !document.querySelector("[data-lightbox]")) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    // Ард талын хуудас гүйлгэгдэхгүй
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose, fullscreen]);
+
+  if (fullscreen) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: C.bg, zIndex: 50, overflowY: "auto" }}>
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 1,
+            background: C.dark,
+            color: C.light,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "14px clamp(16px, 4vw, 40px)",
+          }}
+        >
+          <h2 style={{ fontFamily: fonts.display, fontWeight: 800, fontSize: 18, textTransform: "uppercase", margin: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {title}
+          </h2>
+          <button
+            onClick={onClose}
+            aria-label="Хаах"
+            style={{ flexShrink: 0, background: "transparent", border: "1px solid rgba(245,243,239,0.3)", color: C.light, fontFamily: fonts.display, fontSize: 12, letterSpacing: "0.06em", padding: "8px 14px", borderRadius: 2, cursor: "pointer" }}
+          >
+            ✕ ХААХ
+          </button>
+        </div>
+        <div style={{ maxWidth, margin: "0 auto", padding: "28px clamp(16px, 4vw, 40px) 60px" }}>{children}</div>
+      </div>
+    );
+  }
+
   return (
     <div
       onClick={onClose}

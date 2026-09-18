@@ -3,6 +3,32 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../lib/auth";
 import { C, fonts, Label, inputStyle, Btn, Card, PageTitle } from "../ui";
 import { Modal } from "./Documents";
+import {
+  isImage,
+  isPdf,
+  isVideo,
+  MAX_UPLOAD_MB,
+  resumableUpload,
+  IMAGE_ACCEPT,
+  PDF_ACCEPT,
+  VIDEO_ACCEPT,
+  FILE_ACCEPT,
+  safeName,
+  compressImage,
+  withUrls,
+  FileTile,
+  VideoThumb,
+  LocalThumb,
+  Gallery,
+  Videos,
+  FileLinks,
+  Lightbox,
+  linkBtn,
+  gallery,
+  thumbImg,
+  removeBtn,
+  newBadge,
+} from "../media";
 
 type ReportType = "trip" | "monthly" | "project" | "other";
 
@@ -121,87 +147,14 @@ function orderImages(atts: Attachment[], body: string | null) {
   return [...keys.flatMap((k) => imgs.filter((a) => groupOf(a.section, keys) === k)), ...imgs.filter((a) => groupOf(a.section, keys) === null)];
 }
 
-const isImage = (a: { content_type?: string | null; file_name: string }) =>
-  (a.content_type ?? "").startsWith("image/") || /\.(jpe?g|png|gif|webp|heic|bmp)$/i.test(a.file_name);
-
-const isPdf = (a: { content_type?: string | null; file_name: string }) =>
-  a.content_type === "application/pdf" || /\.pdf$/i.test(a.file_name);
-
 interface Group {
   key: string | null;
   title: string;
 }
 
-const IMAGE_ACCEPT = "image/*";
-const PDF_ACCEPT = "application/pdf,.pdf";
-const FILE_ACCEPT = "image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
-
-function safeName(name: string) {
-  return name.replace(/[^\w.\-]/g, "_");
-}
-
-// Утасны том зургийг байршуулахаас өмнө жижигрүүлнэ (урт тал ≤ 2000px, JPEG 82%).
-// GIF/HEIC, жижиг файл, эсвэл шахаад томорсон бол эх файлыг нь үлдээнэ.
-const MAX_SIDE = 2000;
-async function compressImage(file: File): Promise<File> {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 400 * 1024) return file;
-  try {
-    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-    const w = Math.round(bmp.width * scale);
-    const h = Math.round(bmp.height * scale);
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return file;
-    ctx.fillStyle = "#fff"; // PNG-ийн тунгалаг хэсэг хар болохоос сэргийлнэ
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(bmp, 0, 0, w, h);
-    bmp.close();
-    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.82));
-    if (!blob || blob.size >= file.size) return file;
-    return new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg", lastModified: file.lastModified });
-  } catch {
-    return file;
-  }
-}
-
-// Signed URL-уудыг нэг дор авч хавсралтад залгана
-async function withUrls(atts: Attachment[]): Promise<Attachment[]> {
-  if (atts.length === 0) return atts;
-  const { data } = await supabase.storage.from("docs").createSignedUrls(
-    atts.map((a) => a.storage_path),
-    60 * 60,
-  );
-  return atts.map((a, i) => ({ ...a, url: data?.[i]?.signedUrl ?? undefined }));
-}
-
 async function fetchAtts(reportId: string) {
   const { data } = await supabase.from("report_attachments").select("*").eq("report_id", reportId).order("created_at");
   return withUrls((data as Attachment[]) ?? []);
-}
-
-// Зураг биш файлын (PDF г.м.) дүрс
-function FileTile({ name, pdf }: { name: string; pdf: boolean }) {
-  return (
-    <div style={{ ...fileTile, flexDirection: "column", gap: 6 }}>
-      <span style={{ ...pdfBadge, background: pdf ? "#b3361f" : C.muted }}>{pdf ? "PDF" : (name.split(".").pop() ?? "").toUpperCase()}</span>
-      <span style={{ fontSize: 10, lineHeight: 1.3, maxHeight: "3.9em", overflow: "hidden" }}>{name}</span>
-    </div>
-  );
-}
-
-// Шинээр сонгосон файлын урьдчилсан харагдац (object URL-ийг цэвэрлэнэ)
-function LocalThumb({ file }: { file: File }) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!file.type.startsWith("image/")) return;
-    const u = URL.createObjectURL(file);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [file]);
-  return url ? <img src={url} alt={file.name} style={thumbImg} /> : <FileTile name={file.name} pdf={isPdf({ content_type: file.type, file_name: file.name })} />;
 }
 
 export default function Reports() {
@@ -258,7 +211,16 @@ export default function Reports() {
 
   function addFiles(list: FileList | File[] | null, section: string | null) {
     if (!list) return;
-    const arr = Array.from(list).map((file) => ({ file, section }));
+    const all = Array.from(list);
+    // Зургийг шахдаг тул зөвхөн зураг биш файлын хэмжээг шалгана
+    const tooBig = all.filter((f) => !f.type.startsWith("image/") && f.size > MAX_UPLOAD_MB * 1024 * 1024);
+    if (tooBig.length) {
+      alert(
+        tooBig.map((f) => `"${f.name}" — ${(f.size / 1024 / 1024).toFixed(0)}MB`).join("\n") +
+          `\n\nНэг файл ${MAX_UPLOAD_MB}MB-аас ихгүй байх ёстой. Урт видеог YouTube-д (Unlisted) байршуулаад холбоосыг нь тайланд бичнэ үү.`,
+      );
+    }
+    const arr = all.filter((f) => !tooBig.includes(f)).map((file) => ({ file, section }));
     if (arr.length) setNewFiles((prev) => [...prev, ...arr]);
     setActiveGroup(section);
   }
@@ -304,10 +266,19 @@ export default function Reports() {
       const item = newFiles[i];
       setProgress(`Жижигрүүлж байна ${i + 1}/${newFiles.length}…`);
       const f = await compressImage(item.file);
-      setProgress(`Байршуулж байна ${i + 1}/${newFiles.length}…`);
+      const label = `Байршуулж байна ${i + 1}/${newFiles.length}`;
+      setProgress(`${label}…`);
       const path = `reports/${reportId}/${Date.now()}_${i}_${safeName(f.name)}`;
-      const { error: upErr } = await supabase.storage.from("docs").upload(path, f, { contentType: f.type || undefined });
-      if (upErr) throw new Error(`"${f.name}": ${upErr.message}`);
+      if (f.size > 6 * 1024 * 1024) {
+        try {
+          await resumableUpload(path, f, (pct) => setProgress(`${label} — ${f.name}: ${pct}%`));
+        } catch (e) {
+          throw new Error(`"${f.name}": ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else {
+        const { error: upErr } = await supabase.storage.from("docs").upload(path, f, { contentType: f.type || undefined });
+        if (upErr) throw new Error(`"${f.name}": ${upErr.message}`);
+      }
       const { error: insErr } = await supabase.from("report_attachments").insert({
         report_id: reportId,
         storage_path: path,
@@ -509,7 +480,7 @@ export default function Reports() {
       </Card>
 
       {viewing && (
-        <Modal onClose={() => setViewing(null)} title={viewing.title} maxWidth={760}>
+        <Modal onClose={() => setViewing(null)} title={viewing.title} maxWidth={1000} fullscreen>
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 18 }}>
             <div>
               <Label>Төрөл</Label>
@@ -621,7 +592,7 @@ export default function Reports() {
                 onChange={(e) => setForm({ ...form, body: e.target.value })}
               />
               <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>
-                Бүлгийн гарчгийг «1. Гарчиг», «2. Гарчиг» гэж мөрийн эхэнд бичвэл доор бүлэг бүрт зураг, PDF хавсаргах хэсэг гарна.
+                Бүлгийн гарчгийг «1. Гарчиг», «2. Гарчиг» гэж мөрийн эхэнд бичвэл доор бүлэг бүрт зураг, PDF, видео хавсаргах хэсэг гарна.
               </div>
             </div>
 
@@ -643,7 +614,7 @@ export default function Reports() {
                 const keys = sections.map((x) => x.num);
                 const groups: Group[] = [
                   ...sections.map((x) => ({ key: x.num as string | null, title: `${x.num}. ${x.title}` })),
-                  { key: null, title: sections.length ? "Бусад (бүлэгт хамаарахгүй)" : "Тайлангийн зураг, PDF" },
+                  { key: null, title: sections.length ? "Бусад (бүлэгт хамаарахгүй)" : "Тайлангийн зураг, PDF, видео" },
                 ];
                 return groups.map((g) => (
                   <AttachGroup
@@ -706,33 +677,6 @@ export default function Reports() {
   );
 }
 
-function Gallery({ imgs, onOpen }: { imgs: Attachment[]; onOpen: (a: Attachment) => void }) {
-  if (imgs.length === 0) return null;
-  return (
-    <div style={{ ...gallery, marginTop: 10 }}>
-      {imgs.map((a) => (
-        <button key={a.id} onClick={() => onOpen(a)} title={a.file_name} style={{ padding: 0, border: "none", background: "none", cursor: "zoom-in" }}>
-          {a.url ? <img src={a.url} alt={a.file_name} loading="lazy" style={thumbImg} /> : <div style={fileTile}>…</div>}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function FileLinks({ files, onDownload }: { files: Attachment[]; onDownload: (a: Attachment) => void }) {
-  if (files.length === 0) return null;
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-      {files.map((a) => (
-        <button key={a.id} onClick={() => onDownload(a)} style={fileChip} title="Нээх">
-          <span style={{ ...pdfBadge, background: isPdf(a) ? "#b3361f" : C.muted }}>{isPdf(a) ? "PDF" : (a.file_name.split(".").pop() ?? "").toUpperCase()}</span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file_name}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // Үзэх горим: бүлэг бүрийн текстийн доор тухайн бүлгийн зураг, PDF
 function ReportBody({
   body,
@@ -765,7 +709,8 @@ function ReportBody({
               </div>
               {x.text && <div style={{ ...text, marginTop: 6 }}>{x.text}</div>}
               <Gallery imgs={g.filter(isImage)} onOpen={onOpen} />
-              <FileLinks files={g.filter((a) => !isImage(a))} onDownload={onDownload} />
+              <Videos vids={g.filter(isVideo)} />
+              <FileLinks files={g.filter((a) => !isImage(a) && !isVideo(a))} onDownload={onDownload} />
             </div>
           );
         })}
@@ -774,7 +719,8 @@ function ReportBody({
         <div style={{ marginTop: 18 }}>
           <Label>{sections.length ? "Бусад хавсралт" : "Хавсралт"} ({other.length})</Label>
           <Gallery imgs={other.filter(isImage)} onOpen={onOpen} />
-          <FileLinks files={other.filter((a) => !isImage(a))} onDownload={onDownload} />
+          <Videos vids={other.filter(isVideo)} />
+          <FileLinks files={other.filter((a) => !isImage(a) && !isVideo(a))} onDownload={onDownload} />
         </div>
       )}
     </>
@@ -851,7 +797,7 @@ function AttachGroup({
         borderRadius: 3,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontFamily: fonts.body, fontSize: 13, fontWeight: 600, color: C.dark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {title}
         </div>
@@ -859,6 +805,7 @@ function AttachGroup({
           {([
             ["📷 + Зураг", IMAGE_ACCEPT],
             ["📄 + PDF", PDF_ACCEPT],
+            ["🎬 + Видео", VIDEO_ACCEPT],
           ] as const).map(([label, accept]) => (
             <button
               key={label}
@@ -876,12 +823,18 @@ function AttachGroup({
         </div>
       </div>
       {empty ? (
-        <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>Хоосон — зураг, PDF-ээ энд чирч оруулж болно</div>
+        <div style={{ fontFamily: fonts.body, fontSize: 12, color: C.muted, marginTop: 4 }}>Хоосон — зураг, PDF, видеогоо энд чирч оруулж болно</div>
       ) : (
         <div style={{ ...gallery, gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", marginTop: 10 }}>
           {existing.map((a) => (
             <div key={a.id} style={{ position: "relative" }} title={a.file_name}>
-              {isImage(a) && a.url ? <img src={a.url} alt={a.file_name} style={thumbImg} /> : <FileTile name={a.file_name} pdf={isPdf(a)} />}
+              {isImage(a) && a.url ? (
+                <img src={a.url} alt={a.file_name} style={thumbImg} />
+              ) : isVideo(a) && a.url ? (
+                <VideoThumb src={a.url} name={a.file_name} />
+              ) : (
+                <FileTile name={a.file_name} pdf={isPdf(a)} />
+              )}
               <button type="button" onClick={() => onRemoveExisting(a)} style={removeBtn} aria-label="Хасах">
                 ×
               </button>
@@ -903,185 +856,3 @@ function AttachGroup({
     </div>
   );
 }
-
-function Lightbox({
-  images,
-  index,
-  onIndex,
-  onClose,
-}: {
-  images: Attachment[];
-  index: number;
-  onIndex: (i: number) => void;
-  onClose: () => void;
-}) {
-  const n = images.length;
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight") onIndex((index + 1) % n);
-      if (e.key === "ArrowLeft") onIndex((index - 1 + n) % n);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [index, n, onIndex, onClose]);
-
-  const img = images[index];
-  const navBtn: React.CSSProperties = {
-    position: "absolute",
-    top: "50%",
-    transform: "translateY(-50%)",
-    background: "rgba(245,243,239,0.15)",
-    color: C.light,
-    border: "none",
-    fontSize: 32,
-    width: 48,
-    height: 64,
-    cursor: "pointer",
-    borderRadius: 3,
-  };
-
-  return (
-    <div
-      onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(10,9,8,0.92)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-    >
-      <img
-        src={img.url}
-        alt={img.file_name}
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: "100%", maxHeight: "86vh", objectFit: "contain", boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }}
-      />
-      <div style={{ position: "absolute", bottom: 16, left: 0, right: 0, textAlign: "center", color: C.light, fontFamily: fonts.mono, fontSize: 12 }}>
-        {index + 1} / {n} · {img.file_name}
-      </div>
-      {n > 1 && (
-        <>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onIndex((index - 1 + n) % n);
-            }}
-            style={{ ...navBtn, left: 12 }}
-            aria-label="Өмнөх"
-          >
-            ‹
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onIndex((index + 1) % n);
-            }}
-            style={{ ...navBtn, right: 12 }}
-            aria-label="Дараах"
-          >
-            ›
-          </button>
-        </>
-      )}
-      <button
-        onClick={onClose}
-        style={{ position: "absolute", top: 12, right: 16, background: "none", border: "none", color: C.light, fontSize: 34, cursor: "pointer" }}
-        aria-label="Хаах"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-const linkBtn: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: C.accent,
-  fontFamily: fonts.body,
-  fontSize: 13,
-  cursor: "pointer",
-  textDecoration: "underline",
-};
-
-const gallery: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-  gap: 10,
-};
-
-const thumbImg: React.CSSProperties = {
-  width: "100%",
-  aspectRatio: "1 / 1",
-  objectFit: "cover",
-  display: "block",
-  borderRadius: 3,
-  border: `1px solid ${C.line}`,
-  background: "#fff",
-};
-
-const fileTile: React.CSSProperties = {
-  ...thumbImg,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 6,
-  boxSizing: "border-box",
-  fontFamily: fonts.mono,
-  fontSize: 11,
-  color: C.muted,
-  textAlign: "center",
-  wordBreak: "break-all",
-  overflow: "hidden",
-};
-
-const removeBtn: React.CSSProperties = {
-  position: "absolute",
-  top: 4,
-  right: 4,
-  width: 24,
-  height: 24,
-  borderRadius: "50%",
-  border: "none",
-  background: "rgba(26,24,20,0.75)",
-  color: "#fff",
-  fontSize: 16,
-  lineHeight: "24px",
-  cursor: "pointer",
-  padding: 0,
-};
-
-const newBadge: React.CSSProperties = {
-  position: "absolute",
-  left: 4,
-  top: 4,
-  background: C.accent,
-  color: C.light,
-  fontFamily: fonts.mono,
-  fontSize: 9,
-  letterSpacing: "0.1em",
-  padding: "2px 5px",
-  borderRadius: 2,
-};
-
-const pdfBadge: React.CSSProperties = {
-  fontFamily: fonts.mono,
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: "0.08em",
-  color: "#fff",
-  padding: "2px 6px",
-  borderRadius: 2,
-  flexShrink: 0,
-};
-
-const fileChip: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  maxWidth: "100%",
-  padding: "7px 10px",
-  background: "#faf8f4",
-  border: `1px solid ${C.line}`,
-  borderRadius: 3,
-  cursor: "pointer",
-  fontFamily: fonts.body,
-  fontSize: 13,
-  color: C.dark,
-};

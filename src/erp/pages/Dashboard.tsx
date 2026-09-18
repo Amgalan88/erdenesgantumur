@@ -8,6 +8,7 @@ interface Stats {
   docsOut: number;
   files: number;
   reports: number;
+  roadmap: number;
   users: number | null;
 }
 
@@ -24,22 +25,23 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 
 export default function Dashboard() {
   const { profile, can } = useAuth();
-  const [s, setS] = useState<Stats>({ docsIn: 0, docsOut: 0, files: 0, reports: 0, users: null });
+  const [s, setS] = useState<Stats>({ docsIn: 0, docsOut: 0, files: 0, reports: 0, roadmap: 0, users: null });
 
   useEffect(() => {
     async function run() {
       const count = (q: any) => q.then((r: any) => r.count ?? 0);
-      const [docsIn, docsOut, files, reports] = await Promise.all([
+      const [docsIn, docsOut, files, reports, roadmap] = await Promise.all([
         can("documents", "view") ? count(supabase.from("documents").select("*", { count: "exact", head: true }).eq("direction", "in")) : 0,
         can("documents", "view") ? count(supabase.from("documents").select("*", { count: "exact", head: true }).eq("direction", "out")) : 0,
         can("files", "view") ? count(supabase.from("files").select("*", { count: "exact", head: true })) : 0,
         can("reports", "view") ? count(supabase.from("reports").select("*", { count: "exact", head: true })) : 0,
+        can("roadmap", "view") ? count(supabase.from("roadmap_items").select("*", { count: "exact", head: true })) : 0,
       ]);
       let users: number | null = null;
       if (profile?.role === "superadmin" || profile?.role === "director") {
         users = await count(supabase.from("profiles").select("*", { count: "exact", head: true }));
       }
-      setS({ docsIn, docsOut, files, reports, users });
+      setS({ docsIn, docsOut, files, reports, roadmap, users });
     }
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -55,6 +57,7 @@ export default function Dashboard() {
         {can("documents", "view") && <Stat label="Явсан бичиг" value={s.docsOut} />}
         {can("files", "view") && <Stat label="Бичиг баримт" value={s.files} />}
         {can("reports", "view") && <Stat label="Тайлан" value={s.reports} />}
+        {can("roadmap", "view") && <Stat label="Roadmap зорилт" value={s.roadmap} />}
         {s.users !== null && <Stat label="Хэрэглэгч" value={s.users} />}
       </div>
 

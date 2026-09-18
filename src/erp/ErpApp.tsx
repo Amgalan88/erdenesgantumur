@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import Documents from "./pages/Documents";
 import Files from "./pages/Files";
 import Reports from "./pages/Reports";
+import Roadmap from "./pages/Roadmap";
 import Users from "./pages/Users";
 import AuditLog from "./pages/AuditLog";
 
@@ -42,6 +43,7 @@ export default function ErpApp() {
         <Route path="documents" element={<Documents />} />
         <Route path="files" element={<Files />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="roadmap" element={<Roadmap />} />
         <Route path="audit" element={<AuditLog />} />
         <Route path="users" element={<Users />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
